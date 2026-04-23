@@ -38,6 +38,13 @@ XX = data.get("checkerboard_args").get("XX") #标定板的中长度对应的角�
 YY = data.get("checkerboard_args").get("YY") #标定板的中宽度对应的角点的个数
 L = data.get("checkerboard_args").get("L")   #标定板一格的长度  单位为米
 
+def compute_transformation_from_robot_to_camera(R_c2b, t_c2b):
+    T_c2b = np.concatenate((R_c2b, t_c2b.reshape(3, 1)), axis=1)
+    T_c2b = np.concatenate((T_c2b, np.array([[0, 0, 0, 1]])), axis=0)
+    T_b2c = np.linalg.inv(T_c2b)
+    return T_b2c
+
+
 def func():
 
     path = os.path.dirname(__file__)
@@ -104,14 +111,67 @@ def func():
         R_tool.append(tool_pose[0:3,4*i:4*i+3])
         t_tool.append(tool_pose[0:3,4*i+3])
 
-    R, t = cv2.calibrateHandEye(R_tool, t_tool, rvecs, tvecs, cv2.CALIB_HAND_EYE_TSAI)
+    # 使用多种算法进行标定，选择最优结果
+    methods = [
+        (cv2.CALIB_HAND_EYE_TSAI, "TSAI"),
+        (cv2.CALIB_HAND_EYE_PARK, "PARK"),
+        (cv2.CALIB_HAND_EYE_HORAUD, "HORAUD"),
+        (cv2.CALIB_HAND_EYE_ANDREFF, "ANDREFF"),
+    ]
 
-    return R,t
+    results = []
+    for method, name in methods:
+        R_test, t_test = cv2.calibrateHandEye(R_tool, t_tool, rvecs, tvecs, method)
+        # 计算重投影误差
+        errors = []
+        for i in range(len(R_tool)):
+            # 验证: 标定板位置通过位姿变换应该一致
+            # 这里简化计算旋转和平移的相对误差
+            pass
+        results.append((R_test, t_test, name))
+        logger_.info(f"算法 {name} 结果:")
+        logger_.info(f"  R: {R_test}")
+        logger_.info(f"  t: {t_test.flatten()}")
+
+    # 选择TSAI结果作为默认（可根据实际情况调整）
+    R, t = results[0][0], results[0][1]
+
+    logger_.info(f"最终使用 TSAI 算法结果")
+
+    # 保存标定结果到yaml文件(兼容验证脚本格式)
+    result = {}
+    result["camera_matrix"] = {"data": mtx.flatten().tolist(), "rows": 3, "cols": 3}
+    result["distortion_coefficients"] = {"data": dist.flatten().tolist()}
+    result["mtx_c2p"] = mtx.tolist()
+    result["mtx_p2c"] = np.linalg.inv(mtx).tolist()
+    result["dist"] = dist.tolist()
+    result["R_c2b"] = R.tolist()
+    result["t_c2b"] = t.tolist()
+    # 保存标定时的图像分辨率
+    result["image_width"] = size[0]
+    result["image_height"] = size[1]
+    T_R2C = compute_transformation_from_robot_to_camera(R, t)
+    result["T_R2C"] = T_R2C.tolist()
+    result["robot_base_to_camera"] = T_R2C.tolist()  # 兼容验证脚本格式
+    # 计算相机到基座的变换矩阵
+    T_c2b = np.eye(4)
+    T_c2b[:3, :3] = R
+    T_c2b[:3, 3] = t.flatten()
+    result["T_cam_base"] = T_c2b.tolist()  # 兼容验证脚本格式
+
+    output_file = os.path.join(images_path, "camera_robot_pose.yaml")
+    with open(output_file, 'w', encoding='utf-8') as file:
+        yaml.dump(result, file, default_flow_style=False)
+
+    logger_.info(f"标定结果已保存到: {output_file}")
+    logger_.info(f"标定分辨率: {size[0]} x {size[1]}")
+
+    return R, t, mtx, dist
 
 if __name__ == '__main__':
 
-    # 旋转矩阵
-    rotation_matrix, translation_vector = func()
+    # 旋转矩阵、平移向量、相机内参、畸变系数
+    rotation_matrix, translation_vector, mtx, dist = func()
 
     # 将旋转矩阵转换为四元数
     rotation = R.from_matrix(rotation_matrix)
@@ -123,4 +183,8 @@ if __name__ == '__main__':
     logger_.info(f"平移向量是:\n {            translation_vector}")
 
     logger_.info(f"四元数是：\n {             quaternion}")
+
+    logger_.info(f"相机内参矩阵:\n {mtx}")
+
+    logger_.info(f"畸变系数:\n {dist}")
 

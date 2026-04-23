@@ -6,7 +6,10 @@ import time
 import sys
 import numpy as np
 import cv2
-import pyrealsense2 as rs
+# import pyrealsense2 as rs
+from pyorbbecsdk import Pipeline, Config, AlignFilter, OBStreamType, OBSensorType, OBFormat, OBFrameAggregateOutputMode, VideoFrame
+from typing import Union, Any, Optional
+
 
 from libs.log_setting import CommonLog
 from libs.auxiliary import create_folder_with_date, get_ip, popup_message
@@ -17,13 +20,56 @@ cam0_origin_path = create_folder_with_date() # 提前建立好的存储照片文
 logger_ = logging.getLogger(__name__)
 logger_ = CommonLog(logger_)
 
+# ==================== 常量 ====================
+ESC_KEY = 27
+MIN_DEPTH = 20    # 最小有效深度距离 mm
+MAX_DEPTH = 10000 # 最大有效深度距离 mm
+
+
+
+def frame_to_bgr_image(frame: VideoFrame) -> Union[Optional[np.array], Any]:
+    width = frame.get_width()
+    height = frame.get_height()
+    color_format = frame.get_format()
+    data = np.asanyarray(frame.get_data())
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    if color_format == OBFormat.RGB:
+        image = np.resize(data, (height, width, 3))
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    elif color_format == OBFormat.BGR:
+        image = np.resize(data, (height, width, 3))
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    elif color_format == OBFormat.YUYV:
+        image = np.resize(data, (height, width, 2))
+        image = cv2.cvtColor(image, cv2.COLOR_YUV2BGR_YUYV)
+    elif color_format == OBFormat.MJPG:
+        image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    elif color_format == OBFormat.I420:
+        image = i420_to_bgr(data, width, height)
+        return image
+    elif color_format == OBFormat.NV12:
+        image = nv12_to_bgr(data, width, height)
+        return image
+    elif color_format == OBFormat.NV21:
+        image = nv21_to_bgr(data, width, height)
+        return image
+    elif color_format == OBFormat.UYVY:
+        image = np.resize(data, (height, width, 2))
+        image = cv2.cvtColor(image, cv2.COLOR_YUV2BGR_UYVY)
+    else:
+        print("Unsupported color format: {}".format(color_format))
+        return None
+    return image
+
+
 def callback(frame):
 
-    scaling_factor = 2.0
+    scaling_factor = 1.0
     global count
 
     cv_img = cv2.resize(frame, None, fx=scaling_factor, fy=scaling_factor, interpolation=cv2.INTER_AREA)
-    cv2.imshow("Capture_Video", cv_img)  # 窗口显示，显示名为 Capture_Video
+    #cv_img = frame
+    cv2.imshow("Capture_Video", frame)  # 窗口显示，显示名为 Capture_Video
 
     k = cv2.waitKey(30) & 0xFF  # 每帧数据延时 1ms，延时不能为 0，否则读取的结果会是静态帧
 
@@ -164,6 +210,129 @@ def displayD435():
         pipeline.stop()
         cv2.destroyAllWindows()
 
+def display_gemini_camera():
+    pipeline = Pipeline()
+    config = Config()
+
+    try:
+        # 配置彩色流
+        profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+        color_profile = profile_list.get_video_stream_profile(0, 0, OBFormat.RGB, 0)
+        config.enable_stream(color_profile)
+
+        # 配置深度流
+        profile_list = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
+        depth_profile = profile_list.get_default_video_stream_profile()
+        config.enable_stream(depth_profile)
+
+        # 确保获取完整帧集
+        config.set_frame_aggregate_output_mode(OBFrameAggregateOutputMode.FULL_FRAME_REQUIRE)
+
+    except Exception as e:
+        print(f"流配置错误: {e}")
+        return
+
+    # 启用帧同步
+    try:
+        pipeline.enable_frame_sync()
+    except Exception as e:
+        print(f"帧同步错误: {e}")
+
+    try:
+        pipeline.start(config)
+        print("相机启动成功")
+    except Exception as e:
+        print(f"Pipeline启动错误: {e}")
+        return
+
+    # 创建深度到彩色的对齐过滤器
+    align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
+
+    # Set window size
+    # window_width = 1280
+    # window_height = 720
+    # cv2.namedWindow("QuickStart Viewer", cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow("QuickStart Viewer", window_width, window_height)
+
+    global count
+    count = 1
+
+    try:
+        while True:
+
+            # Retrieve a frameset with a 100ms timeout
+            frames = pipeline.wait_for_frames(1000)
+            if not frames:
+                continue
+                
+            color_frame = frames.get_color_frame()
+            depth_frame = frames.get_depth_frame()
+            
+            if not color_frame or not depth_frame:
+                continue
+
+            # --- Spatial Alignment ---
+            # Transforms one stream to the coordinate system/FOV of the other
+            frames = align_filter.process(frames)
+            if not frames:
+                continue
+            
+            frames = frames.as_frame_set()
+            color_frame = frames.get_color_frame()
+            depth_frame = frames.get_depth_frame()
+            
+            if not color_frame or not depth_frame:
+                continue
+
+            # Convert raw color frame to BGR for OpenCV rendering
+            color_image = frame_to_bgr_image(color_frame)
+            if color_image is None:
+                print("Failed to convert color frame")
+                continue
+                
+            # --- Depth Image Processing --- only use color frame
+            # try:
+            #     # Convert raw buffer to 2D numpy array
+            #     depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+            #         (depth_frame.get_height(), depth_frame.get_width()))
+            # except ValueError:
+            #     print("Failed to reshape depth data")
+            #     continue
+                
+
+            # depth_scale = depth_frame.get_depth_scale()
+            # depth_width = depth_frame.get_width()
+            # depth_height = depth_frame.get_height()
+
+            # # 检查分辨率并缩放内参
+            # actual_width = color_frame.get_width()
+            # actual_height = color_frame.get_height()
+
+            # Apply depth scale to get actual distance in mm and filter by range
+            # depth_data = depth_data.astype(np.float32) * depth_frame.get_depth_scale()
+            # depth_data = np.where((depth_data > MIN_DEPTH) & (depth_data < MAX_DEPTH), depth_data, 0)
+            
+            # # Normalize and colormap for visualization
+            # depth_data = depth_data.astype(np.uint16)
+            # depth_image = cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX)
+            # depth_image = cv2.applyColorMap(depth_image.astype(np.uint8), cv2.COLORMAP_JET)
+            
+
+            # color_image = np.asanyarray(color_frame.get_data())
+            # color_image_resized = cv2.resize(color_image, (window_width, window_height))
+            # callback(color_image_resized)
+            callback(color_image)
+
+
+            # if cv2.waitKey(1) in [ord('q'), ESC_KEY]:
+            #     break
+    finally:
+        cv2.destroyAllWindows()
+        pipeline.stop()
+        print("Pipeline stopped and all windows closed.")
+
+
+
 
 if __name__ == '__main__':
 
@@ -185,4 +354,4 @@ if __name__ == '__main__':
         popup_message("提醒", "机械臂ip没有ping通")
         sys.exit(1)
 
-    displayD435()
+    display_gemini_camera()
