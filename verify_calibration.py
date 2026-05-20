@@ -343,7 +343,7 @@ def main():
 
     # ==================== 配置参数 ====================
     current_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eye_hand_data")
-    data_path = os.path.join("eye_hand_data", find_latest_data_folder(current_path))
+    data_path = os.path.join("eye_hand_data",'data')
     CALIB_FILE_PATH = os.path.join(data_path, "camera_robot_pose.yaml")
 
     DISPLAY_WINDOW = "Calibration Verification"
@@ -508,20 +508,23 @@ def main():
                         if depth_m > 0:
                             # 计算点击点在相机坐标系下的坐标
                             p_cam_click = pixel_to_camera_3d(u_click, v_click, depth_m, camera_matrix, dist_coeffs)
-
+                            print('p_cam_click :           ',p_cam_click)
                             # 计算点击点在机械臂坐标系下的坐标
                             p_base_click = camera_3d_to_base_3d(p_cam_click, T_cam_base)
-
+                            print('p_base_click :           ',p_base_click)
                             # 绘制点击位置（绿色）
                             cv2.circle(display_image, (u_click, v_click), 10, (0, 255, 0), 2)
 
-                            # 显示点击点在两个坐标系下的坐标
+                            # 显示点击点在两个坐标系下的坐标 + 像素坐标
                             cv2.putText(display_image,
-                                        f"Click Cam: ({p_cam_click[0]:.3f}, {p_cam_click[1]:.3f}, {p_cam_click[2]:.3f})",
+                                        f"Click Pixel: ({u_click}, {v_click})",
                                         (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                             cv2.putText(display_image,
-                                        f"Click Base: ({p_base_click[0]:.3f}, {p_base_click[1]:.3f}, {p_base_click[2]:.3f})",
+                                        f"Click Cam: ({p_cam_click[0]:.3f}, {p_cam_click[1]:.3f}, {p_cam_click[2]:.3f})",
                                         (20, 135), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            cv2.putText(display_image,
+                                        f"Click Base: ({p_base_click[0]:.3f}, {p_base_click[1]:.3f}, {p_base_click[2]:.3f})",
+                                        (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
                             # 输出到控制台
                             print(f"\n=== 坐标对比 ===")
